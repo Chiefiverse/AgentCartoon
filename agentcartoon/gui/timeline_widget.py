@@ -10,14 +10,14 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional, Sequence
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPolygonF, QPainter, QPen
 from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QScrollArea,
                              QSizePolicy, QVBoxLayout, QWidget)
 
-from ..core import model
+from ..core import model, quality
 
 ROW_HEIGHT = 18.0
 RULER_HEIGHT = 24.0
@@ -29,6 +29,8 @@ PLAYHEAD = QColor("#ffd166")
 MANUAL = QColor("#ff6b6b")       # 用户手动 K 的帧：红圆点
 TEMPLATE = QColor("#73b8ff")     # 模板/AI 生成的帧：蓝菱形
 LABEL = QColor("#8a8f9e")
+ERROR_MARK = QColor("#ff4d4d")   # 质检 error：标尺上的红条
+WARN_MARK = QColor("#ffa94d")    # 质检 warn：橙条
 
 
 class TimelineCanvas(QWidget):
@@ -44,6 +46,7 @@ class TimelineCanvas(QWidget):
         self.frame = 0
         self.px_per_frame = DEFAULT_PX_PER_FRAME
         self.selected_bone: Optional[str] = None
+        self.issues: List[quality.Issue] = []
         self._scrubbing = False
         self.setMinimumHeight(160)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -61,6 +64,11 @@ class TimelineCanvas(QWidget):
 
     def select_bone(self, name: Optional[str]) -> None:
         self.selected_bone = name
+        self.update()
+
+    def set_issues(self, issues: Sequence[quality.Issue]) -> None:
+        """质检结论画在标尺行：error 红、warn 橙，合并过的区间是一条色带。"""
+        self.issues = list(issues)
         self.update()
 
     def _rows(self):
@@ -111,12 +119,27 @@ class TimelineCanvas(QWidget):
                     continue
                 self._draw_marker(painter, kf, name, y + ROW_HEIGHT / 2)
 
+        self._draw_issues(painter)
+
         px = self.frame * pxf
         painter.setPen(QPen(PLAYHEAD, 1.5))
         painter.drawLine(int(px), 0, int(px), int(self.height()))
         painter.setBrush(PLAYHEAD)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPolygon(_triangle(px, RULER_HEIGHT))
+
+    def _draw_issues(self, painter: QPainter) -> None:
+        """标尺底边一条色带标出问题帧；整段问题（``frame == -1``）画满整条标尺。"""
+        pxf = self.px_per_frame
+        for issue in self.issues:
+            color = ERROR_MARK if issue.level == "error" else WARN_MARK
+            if issue.frame < 0:
+                painter.fillRect(QRectF(0, RULER_HEIGHT - 5, self.width(), 5), color)
+                continue
+            end = max(issue.frame, issue.last_frame)
+            x0 = issue.frame * pxf
+            width = max(4.0, (end - issue.frame) * pxf + pxf * 0.5)
+            painter.fillRect(QRectF(x0, RULER_HEIGHT - 5, width, 5), color)
 
     def _draw_marker(self, painter: QPainter, kf: model.Keyframe, name: str, cy: float) -> None:
         color = MANUAL if kf.source == "manual" else TEMPLATE
@@ -226,6 +249,9 @@ class TimelinePanel(QWidget):
 
     def refresh_markers(self) -> None:
         self.canvas.update()
+
+    def set_issues(self, issues: Sequence[quality.Issue]) -> None:
+        self.canvas.set_issues(issues)
 
     # ------------------------------------------------------------------ 播放
     def toggle_play(self) -> None:

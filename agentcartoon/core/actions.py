@@ -93,10 +93,9 @@ def _add(clip: AnimationClip, frame: int, angles: Dict[str, float],
 
 
 def _flat_foot(leg_local: float, calf_local: float) -> float:
-    """让脚掌保持水平（世界方向 360°）所需的脚踝本地角度。"""
-    leg_world = 90.0 + leg_local
-    calf_world = leg_world + calf_local
-    return 360.0 - leg_world - calf_world
+    """让脚掌保持水平（世界方向 360°，脚尖朝 +X）所需的脚踝本地角度。"""
+    calf_world = 90.0 + leg_local + calf_local
+    return 360.0 - calf_world
 
 
 # --------------------------------------------------------------------------- idle

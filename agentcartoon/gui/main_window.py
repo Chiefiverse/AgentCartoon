@@ -12,14 +12,14 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QPixmap, QUndoCommand, QUndoStack
-from PyQt6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QLabel,
-                             QMainWindow, QMessageBox, QSplitter)
+from PyQt6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QInputDialog,
+                             QLabel, QMainWindow, QMessageBox, QSplitter)
 
-from ..core import actions, model, render, sif
+from ..core import actions, ik, model, quality, render, sif, tweak
 from .action_panel import ActionPanel
 from .canvas_view import CanvasView
 from .skeleton_tree import SkeletonPanel
@@ -75,7 +75,9 @@ class MainWindow(QMainWindow):
         self.canvas_spec = sif.CanvasSpec()
         self.path: Optional[Path] = None
         self.worker: Optional[RenderWorker] = None
+        self.issues: List[quality.Issue] = []
         self._syncing = False
+        self._drag_before: Optional[Tuple[model.SkeletonRig, model.AnimationClip]] = None
 
         self.tree = SkeletonPanel()
         self.canvas = CanvasView()
@@ -131,6 +133,7 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(undo)
         edit_menu.addAction(redo)
         edit_menu.addSeparator()
+        self._act(edit_menu, "抽稀关键帧…", "Ctrl+K", self.extract_keyframes)
         self._act(edit_menu, "清空手动关键帧", "", self.clear_manual_keyframes)
 
         render_menu = bar.addMenu("渲染")
@@ -152,6 +155,9 @@ class MainWindow(QMainWindow):
     def _wire(self) -> None:
         self.canvas.bone_selected.connect(self._on_bone_selected)
         self.canvas.pose_edited.connect(self._on_pose_edited)
+        self.canvas.drag_started.connect(self._on_drag_started)
+        self.canvas.drag_finished.connect(self._on_drag_finished)
+        self.canvas.drag_mode.connect(self._on_drag_mode)
         self.tree.tree.bone_selected.connect(self._on_bone_selected)
         self.tree.tree.angle_edited.connect(self._on_angle_edited)
         self.timeline.frame_changed.connect(self._on_frame_changed)
@@ -171,8 +177,47 @@ class MainWindow(QMainWindow):
             self._syncing = False
 
     def _on_pose_edited(self, frame: int, angles: dict) -> None:
+        """拖拽过程中的实时刷新。撤销记录要等 drag_finished 才入栈，见下。"""
         self.tree.tree.refresh(frame)
         self.timeline.refresh_markers()
+
+    def _on_drag_started(self) -> None:
+        # 画布是直接改 self.clip 的，不在按下时留一份 before 快照就退不回去
+        self._drag_before = (self.rig.copy(), self.clip.copy())
+
+    def _on_drag_finished(self, frame: int) -> None:
+        before, self._drag_before = self._drag_before, None
+        if before is None:
+            return
+        was, now = before[1].pose_at(before[0], frame), self.clip.pose_at(self.rig, frame)
+        if all(abs(was[name] - now[name]) < 1e-9 for name in was):
+            return                      # 按下没动：不该在撤销栈里留一条空记录
+        self.undo_stack.push(SnapshotCommand(self, "拖动骨骼", before, (self.rig, self.clip)))
+
+    def _on_drag_mode(self, mode: str, bone: str) -> None:
+        """按下时告诉用户这一拖是整条链 IK 还是单骨 FK——末端 tip 和骨体挨得很近，
+        不显示出来就会拖完才发现"不是我要的"。"""
+        chain = ik.IK_CHAINS.get(bone)
+        if mode == "IK" and chain:
+            self.statusBar().showMessage(
+                f"IK：拖动 {bone}，联动 {' → '.join(chain)}（按住骨体拖可单转）")
+        else:
+            self.statusBar().showMessage(f"FK：只转 {bone}")
+
+    # ------------------------------------------------------------------ 质检
+    def _run_quality(self) -> None:
+        """跑一遍 §4.4 的五项检测，把结论画进时间轴标尺、摘要放进状态栏。
+
+        每次装好文档（生成/撤销/改角度/拖完）都重算：检测是纯 Python 的逐帧遍历，
+        几十帧不过几毫秒，比想办法判断"哪一项可能变了"可靠得多。
+        """
+        self.issues = quality.check(self.clip, self.rig)
+        self.timeline.set_issues(self.issues)
+        detail = "; ".join(f"{i.message} @帧{i.frame}" for i in self.issues[:3])
+        if len(self.issues) > 3:
+            detail += "…"
+        self.statusBar().showMessage(
+            quality.summarize(self.issues) + (f" — {detail}" if detail else ""))
 
     def _on_angle_edited(self, name: str, value: float) -> None:
         before = (self.rig.copy(), self.clip.copy())
@@ -197,7 +242,8 @@ class MainWindow(QMainWindow):
                              raw_params=params, rig=rig)
         self.undo_stack.push(SnapshotCommand(self, f"生成 {key}", before, (rig, clip)))
         self.panel.say(f"已生成 {key}：{len(clip.sorted_keyframes())} 个关键帧，"
-                       f"{clip.duration_frames} 帧，闭合误差 {clip.closure_error():.2f}°")
+                       f"{clip.duration_frames} 帧，闭合误差 {clip.closure_error():.2f}°，"
+                       f"{quality.summarize(self.issues)}")
 
     def _on_nl(self, text: str) -> None:
         hits = [t.key for t in actions.TEMPLATES if t.key in text.lower() or t.label in text]
@@ -207,6 +253,22 @@ class MainWindow(QMainWindow):
         else:
             self.panel.say("没听出动作名。可用模板：" + "、".join(
                 f"{t.label}({t.key})" for t in actions.TEMPLATES))
+
+    def extract_keyframes(self) -> None:
+        """把密集 K 帧抽稀（只减不改动作）。阈值问用户，因为"减到多少"是审美决定。"""
+        threshold, accepted = QInputDialog.getDouble(
+            self, "抽稀关键帧", "角度阈值（度）：任一骨相对上一保留帧差这么多就留一帧",
+            tweak.DEFAULT_ANGLE_THRESHOLD, 0.0, 90.0, 2)
+        if not accepted:
+            return
+        before = (self.rig.copy(), self.clip.copy())
+        extracted = tweak.extract(self.clip, self.rig, angle_threshold=threshold)
+        kept = len(extracted.sorted_keyframes())
+        error, frame, bone = tweak.max_error(extracted, self.clip, self.rig)
+        self.undo_stack.push(SnapshotCommand(self, "抽稀关键帧", before, (self.rig, extracted)))
+        self.panel.say(f"已抽稀（阈值 {threshold:g}°）：{len(before[1].sorted_keyframes())} → {kept} 个关键帧，"
+                       f"与原曲线最大偏差 {error:.2f}°（帧 {frame} 的 {bone or '—'}）"
+                       + ("，一个都没减下来" if kept >= len(before[1].sorted_keyframes()) else ""))
 
     def clear_manual_keyframes(self) -> None:
         before = (self.rig.copy(), self.clip.copy())
@@ -225,6 +287,7 @@ class MainWindow(QMainWindow):
         self.tree.tree.set_document(self.rig, self.clip)
         self.timeline.set_document(self.rig, self.clip)
         self._on_frame_changed(self.timeline.canvas.frame)
+        self._run_quality()
 
     def document(self) -> sif.SifDocument:
         return sif.SifDocument(rig=self.rig, clip=self.clip, canvas=self.canvas_spec)

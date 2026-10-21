@@ -318,13 +318,19 @@ class AnimationClip:
     def set_pose(self, rig: SkeletonRig, frame: int, angles: Dict[str, float],
                  positions: Optional[Dict[str, Point]] = None, source: str = "manual",
                  interpolation: str = CLAMPED) -> Keyframe:
-        """写入/覆盖某帧的姿态，返回该关键帧。"""
+        """写入/覆盖某帧的姿态，返回该关键帧。
+
+        ``positions=None`` 表示**不动**这一帧已有的骨骼位移，不是清空。拖骨、改角度
+        只换旋转，若不保留就会把模板写进去的 root 位移抹成 (0,0)——角色在那一帧凭空
+        后退一步、走路的推进被捅出一个个洞。要真清空请显式传 ``positions={}``。
+        """
         kf = self.keyframe_at(frame)
         if kf is None:
             kf = Keyframe(frame=frame, interpolation=interpolation, source=source)
             self.keyframes.append(kf)
         kf.bone_angles = dict(angles)
-        kf.bone_positions = dict(positions or {})
+        if positions is not None:
+            kf.bone_positions = dict(positions)
         kf.source = source
         kf.interpolation = interpolation
         return kf

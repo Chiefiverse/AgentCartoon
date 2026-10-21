@@ -7,6 +7,8 @@
 
     python -m agentcartoon.cli --template stickman --action walk \\
         --params "stride=60,speed=normal" --duration 3s --out walk_demo.sif
+
+    python -m agentcartoon.cli --action walk --extract --out walk_sparse.sif   # 抽稀关键帧
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Dict
 
-from .core import actions, model, render, sif
+from .core import actions, model, render, sif, tweak
 
 
 def parse_duration(text: str) -> float:
@@ -61,6 +63,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--duration", default=None, help="片段时长（秒），如 3s；默认用模板时长")
     parser.add_argument("--fps", type=int, default=24, help="帧率，默认 24")
     parser.add_argument("--key-step", type=int, default=2, help="每隔多少帧打一个关键帧，默认 2")
+    parser.add_argument("--extract", action="store_true",
+                        help="抽稀关键帧（默认每 2 帧一 K 太密），只减不改动作")
+    parser.add_argument("--extract-threshold", type=float, default=None, metavar="度",
+                        help=f"抽稀角度阈值，默认 {tweak.DEFAULT_ANGLE_THRESHOLD:g}；"
+                             "越小越保细节，0 = 只按极值点留帧")
+    parser.add_argument("--extract-keep-all", action="store_true",
+                        help="抽稀时保留原始关键帧（只补细节不删）")
     parser.add_argument("--out", default=None, help="输出 .sif 路径")
     parser.add_argument("--render", nargs="?", const="", default=None, metavar="DIR",
                         help="渲染 PNG 序列到目录（默认 <out 名>_frames/）")
@@ -91,11 +100,29 @@ def main(argv=None) -> int:
         print(f"参数有误：{exc}", file=sys.stderr)
         return 2
 
+    rig = model.SkeletonRig()
     clip = actions.build(args.action, fps=args.fps, duration=duration,
-                         key_step=args.key_step, raw_params=raw_params,
-                         rig=model.SkeletonRig())
+                         key_step=args.key_step, raw_params=raw_params, rig=rig)
+    before_frames = len(clip.sorted_keyframes())
+
+    # 给了阈值就等于要抽稀，不必再叠一个 --extract
+    if args.extract or args.extract_threshold is not None:
+        threshold = (tweak.DEFAULT_ANGLE_THRESHOLD if args.extract_threshold is None
+                     else args.extract_threshold)
+        original = clip
+        clip = tweak.extract(clip, rig, angle_threshold=threshold,
+                             keep_originals=args.extract_keep_all)
+        kept = len(clip.sorted_keyframes())
+        error, frame, bone = tweak.max_error(clip, original, rig)
+        note = f"，与原曲线最大偏差 {error:.2f}°（帧 {frame} 的 {bone}）" if error > 1e-6 else ""
+        if kept == before_frames:
+            note += "，一个都没减下来（阈值太紧，或原始曲线本来就不密）"
+        elif kept > before_frames:
+            note += "，反而更密了（阈值 0 = 每帧都留，这是稠密化不是抽稀）"
+        print(f"已抽稀（阈值 {threshold:g}°）：{before_frames} → {kept} 个关键帧{note}")
+
     out = Path(args.out or f"{args.action}_demo.sif")
-    sif.SifDocument(rig=model.SkeletonRig(), clip=clip).save(out)
+    sif.SifDocument(rig=rig, clip=clip).save(out)
 
     seconds = clip.duration_frames / float(args.fps)
     print(f"已写出 {out}：{args.action}，{len(clip.sorted_keyframes())} 个关键帧，"

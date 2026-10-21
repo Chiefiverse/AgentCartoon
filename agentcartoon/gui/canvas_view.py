@@ -17,14 +17,16 @@ from PyQt6.QtCore import QPointF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene
 
-from ..core import model
+from ..core import ik, model
 
 # 世界坐标：Y 轴向上，单位为"骨长"，与 sif.CanvasSpec 的 view-box 同一量纲
 SCENE_BOX = (-2.2, -3.5, 4.4, 7.0)          # 场景矩形（已把 Y 翻下来）
 PX_PER_UNIT = 84.0                           # 默认 1 世界单位 ≈ 84 像素
+TIP_GRAB_RADIUS = 0.13                       # 末端 tip 的命中半径（骨宽 0.07 的两倍）
 LIMB_COLOR = QColor("#e8e8ef")
 JOINT_COLOR = QColor("#73b8ff")
 SELECT_COLOR = QColor("#ffd166")
+IK_COLOR = QColor("#5ce1b0")                # IK 链末端：拖它 = 整链联动
 ONION_COLOR = QColor("#9aa0b4")
 BG_COLOR = QColor("#29292e")
 
@@ -46,6 +48,11 @@ class CanvasView(QGraphicsView):
 
     bone_selected = pyqtSignal(str)
     pose_edited = pyqtSignal(int, dict)      # (frame, 全量本地角度)
+    # 一次按下-拖拽-放开 = 一条撤销记录。逐帧的 pose_edited 不能直接当命令用：
+    # 一次拖拽会发几十条，而且中间态进栈会把撤销变成"退一步再退一步"。
+    drag_started = pyqtSignal()
+    drag_finished = pyqtSignal(int)          # 帧号
+    drag_mode = pyqtSignal(str, str)         # ("IK"|"FK", 骨骼名)：拖的是整链还是单骨
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -63,6 +70,7 @@ class CanvasView(QGraphicsView):
         self.onion_skin: bool = True
         self.selected_bone: Optional[str] = None
         self._dragging = False
+        self._ik_chain: Optional[Tuple[str, ...]] = None
 
     # ------------------------------------------------------------------ 数据
     def set_document(self, rig: model.SkeletonRig, clip: model.AnimationClip) -> None:
@@ -139,6 +147,13 @@ class CanvasView(QGraphicsView):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(JOINT_COLOR)
                 painter.drawEllipse(a, 0.045, 0.045)
+                if name in ik.IK_CHAINS:
+                    # IK 链末端的空心圈：告诉用户"拖这里 = 整条联动"，拖骨体仍是单骨旋转
+                    pen = QPen(IK_COLOR)
+                    pen.setWidthF(0.022)
+                    painter.setPen(pen)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(b, 0.072, 0.072)
 
     # ------------------------------------------------------------------ 交互
     def _world_under(self, widget_pos) -> Tuple[float, float]:
@@ -161,14 +176,40 @@ class CanvasView(QGraphicsView):
                 best, best_dist = name, dist
         return best
 
+    def _tip_at(self, world: Tuple[float, float]) -> Optional[str]:
+        """鼠标是否落在某条 IK 链的末端尖（手/脚）上。先查 tip，再查骨体。
+
+        末端是"点"，骨体是"线"：手指尖离前臂很近，只按线段距离会永远输给前臂，
+        所以 tip 单独一轮、优先于 FK。半径比骨宽大一档，不然手指尖点不准。
+        """
+        if self.rig is None or self.clip is None:
+            return None
+        offset = self.clip.root_offset_at(self.frame)
+        transforms = self.rig.world_transforms(self.clip.pose_at(self.rig, self.frame))
+        best, best_dist = None, TIP_GRAB_RADIUS
+        for name in ik.IK_CHAINS:
+            bone = self.rig.bones.get(name)
+            if bone is None or bone.length <= 0:
+                continue
+            tip = transforms[name][1]
+            dist = math.hypot(tip[0] + offset[0] - world[0], tip[1] + offset[1] - world[1])
+            if dist < best_dist:
+                best, best_dist = name, dist
+        return best
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self.rig is not None:
-            hit = self._hit_test(self._world_under(event.position().toPoint()))
+            world = self._world_under(event.position().toPoint())
+            tip = self._tip_at(world)
+            hit = tip or self._hit_test(world)
             if hit:
                 self.selected_bone = hit
+                self._ik_chain = ik.IK_CHAINS[tip] if tip else None
                 self.bone_selected.emit(hit)
+                self.drag_mode.emit("IK" if tip else "FK", hit)
                 self._dragging = True
                 self.setDragMode(QGraphicsView.DragMode.NoDrag)
+                self.drag_started.emit()
                 self.viewport().update()
                 event.accept()
                 return
@@ -176,7 +217,11 @@ class CanvasView(QGraphicsView):
 
     def mouseMoveEvent(self, event) -> None:
         if self._dragging and self.selected_bone:
-            self._rotate_selected_to(self._world_under(event.position().toPoint()))
+            world = self._world_under(event.position().toPoint())
+            if self._ik_chain:
+                self._solve_ik_to(world)
+            else:
+                self._rotate_selected_to(world)
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -184,10 +229,33 @@ class CanvasView(QGraphicsView):
     def mouseReleaseEvent(self, event) -> None:
         if self._dragging:
             self._dragging = False
+            self._ik_chain = None
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+            self.drag_finished.emit(self.frame)
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def _solve_ik_to(self, world: Tuple[float, float]) -> None:
+        """把链末端拖到鼠标处：根、中、末三骨一起动，末端骨只平移不改朝向。
+
+        目标要减掉根位移换回 rig 世界系——鼠标在画布上的位置是"角色走到的地方"，
+        而 IK 解算的是骨骼自身坐标系。
+        """
+        rig, clip, chain = self.rig, self.clip, self._ik_chain
+        assert rig is not None and clip is not None and chain
+        offset = clip.root_offset_at(self.frame)
+        target = (world[0] - offset[0], world[1] - offset[1])
+        angles = clip.pose_at(rig, self.frame)
+        try:
+            solved = ik.solve(rig, chain, target, angles)
+        except ik.IKError:
+            self._rotate_selected_to(world)   # 自定义骨骼凑不出合法链：退回单骨旋转
+            return
+        angles.update(solved)
+        clip.set_pose(rig, self.frame, angles, source="manual")
+        self.pose_edited.emit(self.frame, angles)
+        self.viewport().update()
 
     def _rotate_selected_to(self, world: Tuple[float, float]) -> None:
         """把选中骨骼转向鼠标方向，写入当前帧关键帧（子骨世界角随之保持）。"""
