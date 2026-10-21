@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Chiefi <341863326+Chiefiverse@users.noreply.github.com>
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# AgentCartoon — 本文件以 AGPL-3.0-only 发布；闭源商用请获取商业许可证，详见 LICENSE。
+
 """参数化动作模板库（设计文档 4.2 方式B）。
 
 五个内置模板：idle_breathing / walk_cycle / run_cycle / wave_hand / jump。

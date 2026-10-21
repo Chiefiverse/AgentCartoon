@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Chiefi <341863326+Chiefiverse@users.noreply.github.com>
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# AgentCartoon — 本文件以 AGPL-3.0-only 发布；闭源商用请获取商业许可证，详见 LICENSE。
+
 """右侧面板：AI 对话占位 + 动作模板按钮 + 参数滑块（§6.1 右栏）。
 
 滑块直接读 :mod:`agentcartoon.core.actions` 的 ParamDef 元数据，新增模板无需改这里。

@@ -130,3 +130,25 @@ agentcartoon/
 | Phase 2 | MediaPipe 视频驱动关键帧、FABRIK IK、RIFE 补帧、质量检测 Agent |
 | Phase 3 | 图像自动骨骼绑定、皮肤权重 |
 | Phase 4 | 打磨与生态（动作库、插件化） |
+
+## 许可证
+
+本项目以 **AGPL-3.0-only**（GNU Affero General Public License v3）发布，全文见 [LICENSE](LICENSE)。
+
+要点：
+
+- 你可以自由使用、修改、分发本代码，包括商用。
+- **但**：分发修改版，或以本代码（含修改版）对外提供网络服务时，必须同样以 AGPL 公开完整对应源码。
+  这条"通过网络交互也算分发"是 AGPL 相对 GPLv3 的关键差别。
+- 需要把本代码嵌入**闭源产品或闭源 SaaS** 而不履行 AGPL 开源义务 → 请购买商业许可证，
+  通过 [GitHub Issues](https://github.com/Chiefiverse/AgentCartoon/issues) 联系。
+
+### 商业双授权
+
+本仓库采用 AGPL + 商业许可的双授权模式（同 GitLab、Qt 的路子）。个人学习、学术研究、
+开源项目都走 AGPL，不需要任何额外授权；只有"想用但不愿开源"的场景才需要商业许可证。
+
+### 贡献
+
+提交 PR 即表示你同意：你的贡献以 AGPL-3.0 授权给所有人，**同时**授权项目维护者以其他
+（含商业）许可再发布该贡献。若你不代表自己所在机构持有该权利，请先确认职务作品条款。

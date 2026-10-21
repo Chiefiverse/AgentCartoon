@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Chiefi <341863326+Chiefiverse@users.noreply.github.com>
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# AgentCartoon — 本文件以 AGPL-3.0-only 发布；闭源商用请获取商业许可证，详见 LICENSE。
+
 """画布视图：用 :meth:`SkeletonRig.world_transforms` 自绘火柴人，支持缩放/平移/洋葱皮/拖骨。
 
 不依赖 Synfig 预览，改角度后立刻能看到结果；渲染预览由主窗口的后台线程负责。

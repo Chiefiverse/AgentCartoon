@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Chiefi <341863326+Chiefiverse@users.noreply.github.com>
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# AgentCartoon — 本文件以 AGPL-3.0-only 发布；闭源商用请获取商业许可证，详见 LICENSE。
+
 """核心数据模型：骨骼、骨骼绑定、关键帧、动画片段（对应设计文档第三章）。
 
 角度约定

@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Chiefi <341863326+Chiefiverse@users.noreply.github.com>
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# AgentCartoon — 本文件以 AGPL-3.0-only 发布；闭源商用请获取商业许可证，详见 LICENSE。
+
 """Synfig ``.sif``（XML）读写。
 
 对应设计文档 2.2 的“文件驱动”方案：读 .sif -> 操作内部模型 -> 写回 .sif -> 交给
