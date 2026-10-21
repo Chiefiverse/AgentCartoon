@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# 生成产物：.sif 与渲染序列都由代码即时生成，不入库
+*.sif
+*_frames/
+*.ppm
+
+# 内部设计与工作记录，不公开
+doc/
+
+# 编辑器/系统
+.DS_Store
+.idea/
+.vscode/

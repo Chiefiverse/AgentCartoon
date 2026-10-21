@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentcartoon"
+description = "AI 辅助的 Synfig 二维火柴人骨骼动画工具"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = [
+    "PyQt6>=6.6",
+    "lxml>=5.0",
+]
+
+[project.optional-dependencies]
+# Phase 2：视频驱动关键帧、IK 求解、补帧与质量检测
+phase2 = [
+    "numpy>=1.26",
+    "mediapipe>=0.10",
+]
+
+[project.scripts]
+agentcartoon = "agentcartoon.cli:main"
+agentcartoon-gui = "agentcartoon.gui.main_window:run"
+
+[tool.setuptools.dynamic]
+version = {attr = "agentcartoon.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["agentcartoon*"]
